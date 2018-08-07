@@ -1,0 +1,197 @@
+# enable Docker for your repository
+options:
+  docker: true
+
+pipelines:
+  branches:
+    dev:
+    - step:
+             #python image with aws-cli installed
+        image: tstrohmeier/awscli:3.6.4
+        script:
+              # aws login
+        - eval $(aws ecr get-login --region ${AWS_DEFAULT_REGION} --no-include-email)
+              # set active color
+        - export COLOR=GREEN
+              # ECS Names
+        - export GREEN_DASHBOARD_SERVICE=GreenService
+        - export GREEN_DASHBOARD_CLUSTER=GreenCluster
+        - export BLUE_DASHBOARD_SERVICE=BlueService
+        - export BLUE_DASHBOARD_CLUSTER=BlueCluster
+              # Set colors
+        - eval DASHBOARD_SERVICE=\$$COLOR'_DASHBOARD_SERVICE'
+        - eval DASHBOARD_CLUSTER=\$$COLOR'_DASHBOARD_CLUSTER'
+              # set task and execrole
+        - export DASHBOARD_TASK_NAME=DashboardTask
+        - export EXECROLE=arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+              # BUILD_ID set to iterate based on build number
+        - export BUILD_ID=$BITBUCKET_COMMIT_$BITBUCKET_BUILD_NUMBER
+              # Docker image tagged with BUILD_ID to maintain previously build images in repo (set cleanup rules in ECS)
+              # Docker file for dashboard is ./Dockerfile
+        - docker build -t ${AWS_REGISTRY_URL}:$BUILD_ID .
+        - export IMAGE_NAME=${AWS_REGISTRY_URL}:$BUILD_ID
+        - echo $IMAGE_NAME
+        - docker push ${IMAGE_NAME}
+              # register the ECS task definition and capture the version
+        - export RUNNING_TASK=$(aws ecs list-tasks --cluster $DASHBOARD_CLUSTER --service-name
+          $DASHBOARD_SERVICE | grep arn:aws:ecs:eu-west-1:123456789012:task/ | tr
+          -d ' ' | tr -d '"')
+        - echo $RUNNING_TASK
+              # Sets stop-task to execute regardless of failure
+        - set +e
+              # Stops active task so new task my be started
+        - aws ecs stop-task --task $RUNNING_TASK --cluster $DASHBOARD_CLUSTER
+        - set -e
+              # Container may need to be exported (many of these options will need to be changed)
+        - export TASK_VERSION=$(aws ecs register-task-definition --execution-role-arn
+          $EXECROLE --family $DASHBOARD_TASK_NAME --container-definitions "[{\"name\":\"DashboardContainer\",\"cpu\":1024,
+          \"memory\":3072,\"image\":\"${IMAGE_NAME}\",\"essential\":true,\"command\":[\"python\",\"-u\",\"/dashboard.py\"],
+          \"portMappings\":[{\"containerPort\":5000,\"hostPort\":5000,\"protocol\":\"tcp\"}],
+          \"logConfiguration\":{\"logDriver\":\"awslogs\",\"options\":{\"awslogs-group\":\"/myproject/dashboard/blue\",
+          \"awslogs-region\":\"eu-west-1\",\"awslogs-stream-prefix\":\"myproject\"}}}]"
+          | grep revision | cut -d ":" -f2 | cut -d "," -f1 | tr -d ' ')
+        - echo  $TASK_VERSION
+              # Update the ECS service to use the updated Task version
+        - aws ecs update-service --cluster $DASHBOARD_CLUSTER --service $DASHBOARD_SERVICE
+          --task-definition $DASHBOARD_TASK_NAME:$TASK_VERSION
+    - step:
+             #python image with aws-cli installed
+        image: tstrohmeier/awscli:3.6.4
+        script:
+              # aws login
+        - eval $(aws ecr get-login --region ${AWS_DEFAULT_REGION} --no-include-email)
+              # set active color
+        - export COLOR=GREEN
+              # ECS Names
+        - export GREEN_API_SERVICE=GreenAPIservice
+        - export GREEN_API_CLUSTER=GreenCluster
+        - export BLUE_API_SERVICE=BlueAPIservice
+        - export BLUE_API_CLUSTER=BlueCluster
+              # Set active service and cluster
+        - eval API_SERVICE=\$$COLOR'_API_SERVICE'
+        - eval API_CLUSTER=\$$COLOR'_API_CLUSTER'
+              # set task and execrole
+        - export API_TASK_NAME=APITask
+        - export EXECROLE=arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+        - export BUILD_ID=$BITBUCKET_COMMIT_$BITBUCKET_BUILD_NUMBER
+              # Docker image tagged with BUILD_ID to maintain previously build images in repo (set cleanup rules in ECS)
+              # Docker file for API is ./Dockerfile-Api
+        - docker build -t ${AWS_REGISTRY_URL}:$BUILD_ID . -f Dockerfile-Api
+              #- docker push ${AWS_REGISTRY_URL}:$BUILD_ID
+              #- docker tag ${AWS_REGISTRY_URL}:$BUILD_ID ${AWS_REGISTRY_URL}:development
+        - export IMAGE_NAME=${AWS_REGISTRY_URL}:$BUILD_ID
+        - echo $IMAGE_NAME
+        - docker push ${IMAGE_NAME}
+              # register the ECS task definition and capture the version
+        - export RUNNING_TASK=$(aws ecs list-tasks --cluster $API_CLUSTER --service-name
+          $API_SERVICE | grep arn:aws:ecs:eu-west-1:123456789012:task/ | tr -d ' '
+          | tr -d '"')
+        - echo $RUNNING_TASK
+              # Sets below line to execute regardless of failure
+        - set +e
+              # Stops active task so new task my be started
+        - aws ecs stop-task --task $RUNNING_TASK --cluster $API_CLUSTER
+        - set -e
+              # Container may need to be exported (many of these options will need to be changed)
+        - export TASK_VERSION=$(aws ecs register-task-definition --execution-role-arn
+          $EXECROLE --family $API_TASK_NAME --container-definitions "[{\"name\":\"APIcontainer\",
+          \"cpu\":1024,\"memory\":3072,\"image\":\"${IMAGE_NAME}\",\"command\":[\"python\",\"-u\",\"/api.py\"],
+          \"essential\":true,\"portMappings\":[{\"containerPort\":5000,\"hostPort\":5001,\"protocol\":\"tcp\"}],
+          \"logConfiguration\":{\"logDriver\":\"awslogs\",\"options\":{\"awslogs-group\":\"/myProject/api\",
+          \"awslogs-region\":\"eu-west-1\",\"awslogs-stream-prefix\":\"myProject\"}}}]"
+          | grep revision | cut -d ":" -f2 | cut -d "," -f1 | tr -d ' ')
+        - echo  $TASK_VERSION
+              # Update the ECS service to use the updated Task version
+        - aws ecs update-service --cluster $API_CLUSTER --service $API_SERVICE --task-definition
+          $API_TASK_NAME:$TASK_VERSION
+    master:
+    - step:
+             #python image with aws-cli installed
+        image: tstrohmeier/awscli:3.6.4
+        script:
+              # set AWS credentials for production account
+        - export AWS_ACCESS_KEY_ID=${PROD_AWS_ACCESS_KEY}
+        - export AWS_SECRET_ACCESS_KEY=${PROD_AWS_SECRET_KEY}
+              # aws login
+        - eval $(aws ecr get-login --region ${AWS_DEFAULT_REGION} --no-include-email)
+              # ECS Names
+        - export DASHBOARD_SERVICE=ServiceProd
+        - export DASHBOARD_CLUSTER=ClusterProd
+              # set task and execrole
+        - export DASHBOARD_TASK_NAME=DashboardTask
+        - export EXECROLE=arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+              # docker
+        - export BUILD_ID=$BITBUCKET_COMMIT_$BITBUCKET_BUILD_NUMBER
+        - docker build -t ${PROD_AWS_REGISTRY_URL}:$BUILD_ID .
+              #- docker push ${AWS_REGISTRY_URL}:$BUILD_ID
+              #- docker tag ${AWS_REGISTRY_URL}:$BUILD_ID ${AWS_REGISTRY_URL}:development
+        - export IMAGE_NAME=${PROD_AWS_REGISTRY_URL}:$BUILD_ID
+        - echo $IMAGE_NAME
+        - docker push ${IMAGE_NAME}
+              # register the ECS task definition and capture the version
+        - export RUNNING_TASK=$(aws ecs list-tasks --cluster $DASHBOARD_CLUSTER --service-name
+          $DASHBOARD_SERVICE | grep arn:aws:ecs:eu-west-1:123456789012:task/ | tr
+          -d ' ' | tr -d '"')
+        - echo $RUNNING_TASK
+              # Sets below line to execute regardless of failure
+        - set +e
+              # Stops active task so new task my be started
+        - aws ecs stop-task --task $RUNNING_TASK --cluster $DASHBOARD_CLUSTER
+        - set -e
+              # Container may need to be exported
+        - export TASK_VERSION=$(aws ecs register-task-definition --execution-role-arn
+          $EXECROLE --family $DASHBOARD_TASK_NAME --container-definitions "[{\"name\":\"DashboardContainer\",\"cpu\":1024,
+          \"memory\":3072,\"image\":\"${IMAGE_NAME}\",\"essential\":true,\"command\":[\"python\",\"-u\",\"/dashboard.py\"],
+          \"portMappings\":[{\"containerPort\":5000,\"hostPort\":5000,\"protocol\":\"tcp\"}],
+          \"logConfiguration\":{\"logDriver\":\"awslogs\",\"options\":{\"awslogs-group\":\"/myProject/dashboard\",
+          \"awslogs-region\":\"eu-west-1\",\"awslogs-stream-prefix\":\"myProject\"}}}]"
+          | grep revision | cut -d ":" -f2 | cut -d "," -f1 | tr -d ' ')
+        - echo  $TASK_VERSION
+              # Update the ECS service to use the updated Task version
+        - aws ecs update-service --cluster $DASHBOARD_CLUSTER --service $DASHBOARD_SERVICE
+          --task-definition $DASHBOARD_TASK_NAME:$TASK_VERSION
+    - step:
+             #python image with aws-cli installed
+        image: tstrohmeier/awscli:3.6.4
+        script:
+               # set AWS credentials
+        - export AWS_ACCESS_KEY_ID=${PROD_AWS_ACCESS_KEY}
+        - export AWS_SECRET_ACCESS_KEY=${PROD_AWS_SECRET_KEY}
+              # aws login
+        - eval $(aws ecr get-login --region ${AWS_DEFAULT_REGION} --no-include-email)
+              # Set active service and cluster
+        - eval API_SERVICE=APIservice
+        - eval API_CLUSTER=ClusterProd
+              # set task and execrole (These don't change)
+        - export API_TASK_NAME=APItask
+        - export EXECROLE=arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+              # docker
+        - export BUILD_ID=$BITBUCKET_COMMIT_$BITBUCKET_BUILD_NUMBER
+        - docker build -t ${PROD_AWS_REGISTRY_URL}:$BUILD_ID ./dashboard -f dashboard/Dockerfile-Api
+              #- docker push ${AWS_REGISTRY_URL}:$BUILD_ID
+              #- docker tag ${AWS_REGISTRY_URL}:$BUILD_ID ${AWS_REGISTRY_URL}:development
+        - export IMAGE_NAME=${PROD_AWS_REGISTRY_URL}:$BUILD_ID
+        - echo $IMAGE_NAME
+        - docker push ${IMAGE_NAME}
+              # register the ECS task definition and capture the version
+        - export RUNNING_TASK=$(aws ecs list-tasks --cluster $API_CLUSTER --service-name
+          $API_SERVICE | grep arn:aws:ecs:eu-west-1:123456789012:task/ | tr -d ' '
+          | tr -d '"')
+        - echo $RUNNING_TASK
+              # Sets below line to execute regardless of failure
+        - set +e
+              # Stops active task so new task my be started
+        - aws ecs stop-task --task $RUNNING_TASK --cluster $API_CLUSTER
+        - set -e
+              # Container may need to be exported
+        - export TASK_VERSION=$(aws ecs register-task-definition --execution-role-arn
+          $EXECROLE --family $API_TASK_NAME --container-definitions "[{\"name\":\"ApiContainer\",
+          \"cpu\":1024,\"memory\":3072,\"image\":\"${IMAGE_NAME}\",\"command\":[\"python\",\"-u\",\"/api.py\"],
+          \"essential\":true,\"portMappings\":[{\"containerPort\":5000,\"hostPort\":5001,\"protocol\":\"tcp\"}],
+          \"logConfiguration\":{\"logDriver\":\"awslogs\",\"options\":{\"awslogs-group\":\"myProject/api\",
+          \"awslogs-region\":\"eu-west-1\",\"awslogs-stream-prefix\":\"myProject\"}}}]"
+          | grep revision | cut -d ":" -f2 | cut -d "," -f1 | tr -d ' ')
+        - echo  $TASK_VERSION
+              # Update the ECS service to use the updated Task version
+        - aws ecs update-service --cluster $API_CLUSTER --service $API_SERVICE --task-definition
+          $API_TASK_NAME:$TASK_VERSION

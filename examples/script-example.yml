@@ -1,0 +1,38 @@
+        script:
+              # aws login
+        - eval $(aws ecr get-login --region ${AWS_DEFAULT_REGION} --no-include-email)
+              #set service and cluster names
+        - eval DASHBOARD_SERVICE=DashboardService
+        - eval DASHBOARD_CLUSTER=DashboardCluster
+              # set task and execrole
+        - export DASHBOARD_TASK_NAME=DashboardTask
+        - export EXECROLE=arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+              # BUILD_ID set to iterate based on build number
+        - export BUILD_ID=$BITBUCKET_COMMIT_$BITBUCKET_BUILD_NUMBER
+              # Docker image tagged with BUILD_ID to maintain previously build images in repo (set cleanup rules in ECS)
+        - docker build -t ${AWS_REGISTRY_URL}:$BUILD_ID ./dashboard
+        - export IMAGE_NAME=${AWS_REGISTRY_URL}:$BUILD_ID
+        - echo $IMAGE_NAME
+        - docker push ${IMAGE_NAME}
+              # register the ECS task definition and capture the version
+        - export RUNNING_TASK=$(aws ecs list-tasks --cluster $DASHBOARD_CLUSTER --service-name
+          $DASHBOARD_SERVICE | grep arn:aws:ecs:eu-west-1:123456789012:task/ | tr
+          -d ' ' | tr -d '"')
+        - echo $RUNNING_TASK
+              # Sets stop-task to execute regardless of failure
+        - set +e
+              # Stops active task so new task my be started
+        - aws ecs stop-task --task $RUNNING_TASK --cluster $DASHBOARD_CLUSTER
+        - set -e
+              # Container may need to be exported (many of these options may need to be changed)
+        - export TASK_VERSION=$(aws ecs register-task-definition --execution-role-arn
+          $EXECROLE --family $DASHBOARD_TASK_NAME --container-definitions "[{\"name\":\"DashboardContainer\",\"cpu\":1024,
+          \"memory\":3072,\"image\":\"${IMAGE_NAME}\",\"essential\":true,\"command\":[\"python\",\"-u\",\"/myProject/dashboard.py\"],
+          \"portMappings\":[{\"containerPort\":5000,\"hostPort\":5000,\"protocol\":\"tcp\"}],
+          \"logConfiguration\":{\"logDriver\":\"awslogs\",\"options\":{\"awslogs-group\":\"/myproject/dashboard/blue\",
+          \"awslogs-region\":\"eu-west-1\",\"awslogs-stream-prefix\":\"myproject\"}}}]"
+          | grep revision | cut -d ":" -f2 | cut -d "," -f1 | tr -d ' ')
+        - echo  $TASK_VERSION
+              # Update the ECS service to use the updated Task version
+        - aws ecs update-service --cluster $DASHBOARD_CLUSTER --service $DASHBOARD_SERVICE
+          --task-definition $DASHBOARD_TASK_NAME:$TASK_VERSION
