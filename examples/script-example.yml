@@ -2,8 +2,8 @@
               # aws login
         - eval $(aws ecr get-login --region ${AWS_DEFAULT_REGION} --no-include-email)
               #set service and cluster names
-        - eval DASHBOARD_SERVICE=DashboardService
-        - eval DASHBOARD_CLUSTER=DashboardCluster
+        - export DASHBOARD_SERVICE=DashboardService
+        - export DASHBOARD_CLUSTER=DashboardCluster
               # set task and execrole
         - export DASHBOARD_TASK_NAME=DashboardTask
         - export EXECROLE=arn:aws:iam::123456789012:role/ecsTaskExecutionRole
@@ -36,3 +36,7 @@
               # Update the ECS service to use the updated Task version
         - aws ecs update-service --cluster $DASHBOARD_CLUSTER --service $DASHBOARD_SERVICE
           --task-definition $DASHBOARD_TASK_NAME:$TASK_VERSION
+
+
+
+
