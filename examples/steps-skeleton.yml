@@ -1,0 +1,23 @@
+options:
+  docker: true
+
+pipelines:
+  branches:
+    dev:
+    - step:
+        image: tstrohmeier/awscli:3.6.4
+        script:
+          - Dashbaord commands go here
+    - step:
+        image: tstrohmeier/awscli:3.6.4
+        script:
+          - API commands go here
+    master:
+    - step:
+        image: tstrohmeier/awscli:3.6.4
+        script:
+          - Dashboard commands go here
+    - step:
+        image: tstrohmeier/awscli:3.6.4
+        script:
+          - API commands go here
